@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mes Recettes Offline</title>
+  <link rel="manifest" href="data:application/json,{
+    "name": "Mes Recettes Offline",
+    "short_name": "Recettes",
+    "description": "Gère tes recettes sans internet !",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#4CAF50",
+    "icons": [
+      {
+        "src": "icon-192.png",
+        "sizes": "192x192",
+        "type": "image/png"
+      }
+    ]
+  }">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+    #search {
+      width: 100%;
+      padding: 10px;
+      font-size: 16px;
+    }
+    #recipe-list {
+      list-style: none;
+      padding: 0;
+    }
+    #recipe-list li {
+      background: #f9f9f9;
+      margin: 10px 0;
+      padding: 15px;
+      border-radius: 5px;
+    }
+    .add-button {
+      display: block;
+      text-align: center;
+      background: #4CAF50;
+      color: white;
+      padding: 10px;
+      text-decoration: none;
+      border-radius: 5px;
+    }
+    #recipe-form {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    textarea {
+      height: 100px;
+    }
+    .page {
+      display: none;
+    }
+    .active {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <!-- Page d'accueil -->
+  <div id="home-page" class="page active">
+    <header>
+      <h1>🍳 Mes Recettes</h1>
+      <input type="text" id="search" placeholder="Rechercher...">
+    </header>
+    <main>
+      <ul id="recipe-list"></ul>
+      <button id="add-button" class="add-button">+ Ajouter</button>
+    </main>
+  </div>
+
+  <!-- Page d'ajout -->
+  <div id="add-page" class="page">
+    <header>
+      <h1>➕ Nouvelle Recette</h1>
+    </header>
+    <main>
+      <form id="recipe-form">
+        <label for="title">Titre</label>
+        <input type="text" id="title" required>
+        
+        <label for="ingredients">Ingrédients (séparés par des virgules)</label>
+        <textarea id="ingredients" required></textarea>
+        
+        <button type="submit">Enregistrer</button>
+        <button type="button" id="cancel-button">Annuler</button>
+      </form>
+    </main>
+  </div>
+
+  <script>
+    // Initialisation de la DB
+    let db;
+    const initDB = () => {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open('RecipesDB', 1);
+
+        request.onupgradeneeded = (event) => {
+          db = event.target.result;
+          if (!db.objectStoreNames.contains('recipes')) {
+            db.createObjectStore('recipes', { keyPath: 'id' });
+          }
+        };
+
+        request.onsuccess = (event) => {
+          db = event.target.result;
+          resolve(db);
+        };
+
+        request.onerror = (event) => {
+          reject('Erreur DB: ' + event.target.error);
+        };
+      });
+    };
+
+    // Fonctions DB
+    const addRecipe = (recipe) => {
+      return new Promise((resolve) => {
+        const transaction = db.transaction(['recipes'], 'readwrite');
+        const store = transaction.objectStore('recipes');
+        store.add(recipe);
+        resolve();
+      });
+    };
+
+    const getAllRecipes = () => {
+      return new Promise((resolve) => {
+        const transaction = db.transaction(['recipes'], 'readonly');
+        const store = transaction.objectStore('recipes');
+        const request = store.getAll();
+
+        request.onsuccess = () => {
+          resolve(request.result);
+        };
+      });
+    };
+
+    // Navigation entre pages
+    function showPage(pageId) {
+      document.querySelectorAll('.page').forEach(page => {
+        page.classList.remove('active');
+      });
+      document.getElementById(pageId).classList.add('active');
+    }
+
+    // Afficher les recettes
+    const displayRecipes = async () => {
+      const recipes = await getAllRecipes();
+      const searchTerm = document.getElementById('search')?.value.toLowerCase() || '';
+      const filteredRecipes = recipes.filter(recipe => 
+        recipe.title.toLowerCase().includes(searchTerm)
+      );
+      
+      const list = document.getElementById('recipe-list');
+      list.innerHTML = filteredRecipes.map(recipe => `
+        <li>
+          <h3>${recipe.title}</h3>
+          <p>${recipe.ingredients.join(', ')}</p>
+        </li>
+      `).join('');
+    };
+
+    // Gestion des événements
+    document.addEventListener('DOMContentLoaded', async () => {
+      await initDB();
+      
+      // Page d'accueil
+      if (document.getElementById('recipe-list')) {
+        displayRecipes();
+        document.getElementById('search').addEventListener('input', displayRecipes);
+        document.getElementById('add-button').addEventListener('click', () => showPage('add-page'));
+      }
+      
+      // Page d'ajout
+      if (document.getElementById('recipe-form')) {
+        document.getElementById('recipe-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const title = document.getElementById('title').value;
+          const ingredients = document.getElementById('ingredients').value
+            .split(',')
+            .map(item => item.trim());
+          
+          await addRecipe({
+            id: Date.now().toString(),
+            title,
+            ingredients
+          });
+          
+          document.getElementById('title').value = '';
+          document.getElementById('ingredients').value = '';
+          showPage('home-page');
+          await displayRecipes();
+        });
+        
+        document.getElementById('cancel-button').addEventListener('click', () => {
+          showPage('home-page');
+        });
+      }
+    });
+
+    // Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        const swCode = `
+          const CACHE_NAME = 'recipes-v1';
+          const ASSETS = ['/'];
+          
+          self.addEventListener('install', (event) => {
+            event.waitUntil(
+              caches.open(CACHE_NAME).then(cache => cache.addAll(ASSETS))
+            );
+          });
+          
+          self.addEventListener('fetch', (event) => {
+            event.respondWith(
+              caches.match(event.request).then(response => response || fetch(event.request))
+            );
+          });
+        `;
+        
+        const blob = new Blob([swCode], { type: 'application/javascript' });
+        const swUrl = URL.createObjectURL(blob);
+        navigator.serviceWorker.register(swUrl);
+      });
+    }
+  </script>
+</body>
+</html>
